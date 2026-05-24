@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Pat Tank 8-bits</title>
+<title>Pat Tank</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body,html{
@@ -23,7 +23,6 @@ body,html{
 canvas{
     display:block;
     image-rendering:pixelated;
-    /* Le canvas s'étire pour couvrir tout l'écran en paysage */
     width:100%;
     height:100%;
     object-fit:fill;
@@ -83,17 +82,14 @@ canvas{
 const canvas = document.getElementById('game');
 const ctx    = canvas.getContext('2d');
 
-// Résolution logique fixe (le canvas interne reste toujours 1000×600)
 const LWIDTH  = 1000;
 const LHEIGHT = 600;
 canvas.width  = LWIDTH;
 canvas.height = LHEIGHT;
 
-// ── Plein écran adaptatif ─────────────────────────────────────────
 function resizeCanvas() {
     const sw = window.innerWidth;
     const sh = window.innerHeight;
-    // On remplit tout l'écran en paysage (pas de letterbox, pas de bandes noires)
     canvas.style.width  = sw + 'px';
     canvas.style.height = sh + 'px';
 }
@@ -406,19 +402,15 @@ function update() {
     }
 }
 
-// ── Jauge de puissance (arc circulaire) ──────────────────────────
 function drawPowerGauge(ratio, isCharging) {
     const cx = WIDTH - 97;
     const cy = HEIGHT - 165;
     const r  = 44;
     ctx.save();
-    // Fond
     ctx.beginPath(); ctx.arc(cx, cy, r+6, 0, Math.PI*2);
     ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
-    // Arc de fond
     ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI*0.75, Math.PI*0.75);
     ctx.strokeStyle='rgba(80,80,80,0.7)'; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
-    // Couleur dynamique
     let gaugeColor = ratio < 0.4 ? '#00ff44' : ratio < 0.75 ? '#ffaa00' : '#ff2200';
     let visible = !(ratio >= 1.0 && Math.floor(Date.now()/150)%2===0);
     if (ratio > 0 && visible) {
@@ -426,23 +418,19 @@ function drawPowerGauge(ratio, isCharging) {
         ctx.arc(cx, cy, r, -Math.PI*0.75, -Math.PI*0.75 + ratio*Math.PI*1.5);
         ctx.strokeStyle=gaugeColor; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
     }
-    // Icône ⚡
     ctx.fillStyle = isCharging ? gaugeColor : 'rgba(200,200,200,0.5)';
     ctx.font='bold 28px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText('⚡', cx, cy);
-    // Pourcentage
     let pct = Math.round(ratio*100);
     ctx.fillStyle = isCharging ? '#000' : 'rgba(80,80,80,0.7)';
     ctx.font='bold 13px monospace';
     ctx.fillText(pct+'%', cx, cy+22);
-    // Label PWR
     ctx.fillStyle = isCharging ? 'rgba(0,0,0,0.8)' : 'rgba(100,100,100,0.5)';
     ctx.font='bold 11px monospace';
     ctx.fillText('PWR', cx, cy-r-12);
     ctx.restore();
 }
 
-// ── Jauge d'essence ───────────────────────────────────────────────
 function drawFuelGauge(x, y, width, height) {
     ctx.save();
     let iconX=x-22, iconY=y+2;
@@ -464,7 +452,6 @@ function drawFuelGauge(x, y, width, height) {
     ctx.restore();
 }
 
-// ── Icônes HUD ────────────────────────────────────────────────────
 function drawBulletIcon(x, y, size) {
     ctx.save();
     ctx.fillStyle='#111';
@@ -501,7 +488,6 @@ function drawClockIcon(x, y, size) {
     ctx.restore();
 }
 
-// ── Boutons virtuels ─────────────────────────────────────────────
 function drawVirtualButton(btn, isSystem=false) {
     ctx.save();
     let alphaFill=btn.active?0.75:0.18;
@@ -522,15 +508,13 @@ function drawVirtualButton(btn, isSystem=false) {
     ctx.restore();
 }
 
-// ── Boucle de rendu ───────────────────────────────────────────────
 function draw() {
     ctx.clearRect(0,0,WIDTH,HEIGHT);
 
-    // ── MENU ──
     if (gameState==='MENU') {
         ctx.fillStyle='#111'; ctx.fillRect(0,0,WIDTH,HEIGHT);
         ctx.fillStyle='#0f0'; ctx.font='50px monospace'; ctx.textAlign='center';
-        ctx.fillText("TANK ARTILLERIE",WIDTH/2,HEIGHT/2-40);
+        ctx.fillText("PAT TANK",WIDTH/2,HEIGHT/2-40);
         ctx.font='24px monospace'; ctx.fillStyle='#fff';
         ctx.fillText("Cliquez sur le bouton virtuel START en haut",WIDTH/2,HEIGHT/2+20);
         ctx.fillText("pour engager le combat !",WIDTH/2,HEIGHT/2+55);
@@ -539,16 +523,12 @@ function draw() {
         return;
     }
 
-    // ── Ciel ──
     ctx.fillStyle='#87CEEB'; ctx.fillRect(0,0,WIDTH,HEIGHT);
-
-    // ── Terrain ──
     ctx.fillStyle='#4CAF50';
     ctx.beginPath(); ctx.moveTo(0,HEIGHT);
     for (let x=0;x<WIDTH;x++) ctx.lineTo(x,terrain[x]);
     ctx.lineTo(WIDTH,HEIGHT); ctx.fill();
 
-    // ── Cibles ──
     let aliveCount=0;
     targets.forEach(t=>{
         if (t.alive) {
@@ -565,7 +545,6 @@ function draw() {
         }
     });
 
-    // ── Joueur ──
     if (player.alive) {
         let ty=terrain[Math.floor(player.x)], cx=player.x, cby=ty-14;
         ctx.fillStyle='#222'; ctx.fillRect(cx-15,ty-6,30,6);
@@ -578,48 +557,33 @@ function draw() {
         ctx.beginPath(); ctx.moveTo(cx,cby); ctx.lineTo(cx+Math.cos(player.angle)*22,cby+Math.sin(player.angle)*22); ctx.stroke();
     }
 
-    // ── Effets ──
     projectiles.forEach(p=>{ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.radius,0,Math.PI*2);ctx.fill();});
     explosions.forEach(e=>{ctx.fillStyle=`rgba(255,140,0,${e.alpha})`;ctx.beginPath();ctx.arc(e.x,e.y,e.currentRadius,0,Math.PI*2);ctx.fill();});
     particles.forEach(p=>{ctx.globalAlpha=Math.max(0,p.alpha);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.radius,0,Math.PI*2);ctx.fill();});
     ctx.globalAlpha=1;
 
-    // ── HUD ──
     if (gameState==='PLAYING'||gameState==='PAUSED') {
         let elapsedTime=Math.floor((Date.now()-startTime-totalPausedTime)/1000);
-
-        // Fond pastille score
         ctx.fillStyle='rgba(255,255,255,0.75)';
         ctx.beginPath(); ctx.roundRect(WIDTH-220,5,210,38,8); ctx.fill();
         ctx.fillStyle='#000'; ctx.font='bold 22px monospace'; ctx.textAlign='right';
         ctx.fillText(`SCORE: ${liveScore}`, WIDTH-14, 34);
-
-        // Fond pastille icônes
         ctx.fillStyle='rgba(255,255,255,0.75)';
         ctx.beginPath(); ctx.roundRect(WIDTH-340,48,330,30,8); ctx.fill();
-
         const iconSize=18, iconY=63, spacing=100;
         const baseX=WIDTH-20;
-
-        // Horloge
         drawClockIcon(baseX-spacing*2-24, iconY, iconSize);
         ctx.fillStyle='#000'; ctx.font='bold 14px monospace'; ctx.textAlign='left';
         ctx.fillText(`${elapsedTime}s`, baseX-spacing*2-12, iconY+5);
-
-        // Réticule
         drawTargetIcon(baseX-spacing-24, iconY, iconSize);
         ctx.fillStyle='#000'; ctx.font='bold 14px monospace';
         ctx.fillText(`${aliveCount}/${NUM_TARGETS}`, baseX-spacing-12, iconY+5);
-
-        // Boulet
         drawBulletIcon(baseX-24, iconY, iconSize);
         ctx.fillStyle='#000'; ctx.font='bold 14px monospace';
         ctx.fillText(`${shotsFired}`, baseX-12, iconY+5);
-
         drawFuelGauge(WIDTH-530,15,150,18);
     }
 
-    // ── Boutons virtuels + jauge PWR ──
     if (gameState==='PLAYING') {
         drawVirtualButton(buttons.start,true);
         drawVirtualButton(buttons.pause,true);
@@ -633,7 +597,6 @@ function draw() {
         else if (showLastPower)       drawPowerGauge(lastFiredPower/MAX_POWER, false);
     }
 
-    // ── Overlays ──
     if (gameState==='PAUSED') {
         ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
         ctx.fillStyle='#fff'; ctx.font='60px monospace'; ctx.textAlign='center';
@@ -680,7 +643,6 @@ function draw() {
             ctx.fillText("SUITE",WIDTH/2,HEIGHT-37);
         }
     }
-
     requestAnimationFrame(()=>{ update(); draw(); });
 }
 draw();
