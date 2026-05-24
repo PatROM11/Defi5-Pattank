@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Tank Artillerie 8-bits</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body,html{
+    background:#111;
+    width:100%;height:100%;
+    overflow:hidden;
+    font-family:monospace;
+    touch-action:none;
+    user-select:none;-webkit-user-select:none;
+}
+#game-container{
+    position:fixed;top:0;left:0;
+    width:100%;height:100%;
+    display:flex;justify-content:center;align-items:center;
+    background:#111;
+}
+canvas{
+    display:block;
+    image-rendering:pixelated;
+    /* Le canvas s'étire pour couvrir tout l'écran en paysage */
+    width:100%;
+    height:100%;
+    object-fit:fill;
+}
+#orientation-overlay{
+    display:none;position:fixed;top:0;left:0;
+    width:100%;height:100%;
+    background:#111;color:#ff0;z-index:100;
+    flex-direction:column;justify-content:center;align-items:center;
+    text-align:center;padding:20px;
+}
+#orientation-overlay h1{font-size:28px;margin-bottom:15px;text-shadow:0 0 10px #f00}
+#orientation-overlay p{font-size:18px;color:#fff}
+.phone-icon{font-size:60px;margin-top:20px;animation:rotatePhone 2s ease-in-out infinite}
+@keyframes rotatePhone{0%{transform:rotate(0deg)}50%{transform:rotate(-90deg)}100%{transform:rotate(-90deg)}}
+#save-score-container{
+    display:none;position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);
+    background:rgba(17,17,17,0.98);border:4px solid #ff0;
+    padding:25px;color:#fff;font-family:monospace;
+    border-radius:12px;box-shadow:0 0 25px rgba(0,255,0,0.6);
+    z-index:30;width:320px;
+}
+#save-score-container h2{color:#ff0;font-size:22px;margin-top:0;margin-bottom:20px;text-align:center}
+#player-name{
+    background:#222;color:#0f0;border:3px solid #0f0;
+    padding:12px;font-family:monospace;font-size:22px;
+    text-align:center;width:100%;outline:none;
+    text-transform:uppercase;margin-bottom:20px;border-radius:6px;
+}
+.form-buttons{display:flex;justify-content:space-between;gap:10px}
+.btn-form{font-family:monospace;font-size:16px;font-weight:bold;padding:12px 20px;border:2px solid;cursor:pointer;border-radius:6px;flex:1}
+.btn-save{background:#0f0;color:#111;border-color:#0f0}
+.btn-save:active{background:#fff;border-color:#fff}
+.btn-ignore{background:#444;color:#fff;border-color:#888}
+.btn-ignore:active{background:#222}
+</style>
+</head>
+<body>
+<div id="orientation-overlay">
+    <h1>ORIENTATION INCORRECTE</h1>
+    <p>Veuillez tourner votre appareil en mode PAYSAGE pour jouer à Pat Tank.</p>
+    <div class="phone-icon">📱🔄</div>
+</div>
+<div id="game-container">
+    <canvas id="game"></canvas>
+    <div id="save-score-container">
+        <h2>ENREGISTRER VOTRE SCORE</h2>
+        <input type="text" id="player-name" placeholder="VOTRE NOM" maxlength="10">
+        <div class="form-buttons">
+            <button id="btn-ignore-score" class="btn-form btn-ignore">IGNORER</button>
+            <button id="btn-save-score"   class="btn-form btn-save">VALIDER</button>
+        </div>
+    </div>
+</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx    = canvas.getContext('2d');
+
+// Résolution logique fixe (le canvas interne reste toujours 1000×600)
+const LWIDTH  = 1000;
+const LHEIGHT = 600;
+canvas.width  = LWIDTH;
+canvas.height = LHEIGHT;
+
+// ── Plein écran adaptatif ─────────────────────────────────────────
+function resizeCanvas() {
+    const sw = window.innerWidth;
+    const sh = window.innerHeight;
+    // On remplit tout l'écran en paysage (pas de letterbox, pas de bandes noires)
+    canvas.style.width  = sw + 'px';
+    canvas.style.height = sh + 'px';
+}
+window.addEventListener('resize', () => { resizeCanvas(); checkOrientation(); });
+window.addEventListener('load',   () => { resizeCanvas(); checkOrientation(); });
+resizeCanvas();
+
+const GRAVITY  = 0.2;
+const WIDTH    = LWIDTH;
+const HEIGHT   = LHEIGHT;
+const MAX_POWER = 30;
+const MAX_FUEL  = 100;
+
+let gameState = 'MENU';
+let startTime = 0, totalPausedTime = 0, pauseStartTime = 0, finalTime = 0;
+let targets = [];
+const NUM_TARGETS = 5;
+let currentFuel = MAX_FUEL;
+let shotsFired  = 0;
+let scoreSavedOrIgnored = false;
+let liveScore   = 10000;
+let lastAddedScoreId = null;
+let terrain = [], player = {}, projectiles = [], explosions = [], particles = [];
+let projectileInFlight = false;
+let lastFiredPower = 0;
+let showLastPower  = false;
+
+const buttons = {
+    start: { x:20,  y:15, w:90,  h:35, label:"START", active:false },
+    pause: { x:125, y:15, w:90,  h:35, label:"PAUSE", active:false },
+    exit:  { x:230, y:15, w:100, h:35, label:"EXIT",  active:false, exitTimeLeft:3, timer:null },
+    left:  { x:30,  y:HEIGHT-75, w:65, h:55, label:"◀", active:false, code:'ArrowLeft'  },
+    right: { x:105, y:HEIGHT-75, w:65, h:55, label:"▶", active:false, code:'ArrowRight' },
+    up:    { x:200, y:HEIGHT-75, w:65, h:55, label:"▲", active:false, code:'ArrowUp'    },
+    down:  { x:275, y:HEIGHT-75, w:65, h:55, label:"▼", active:false, code:'ArrowDown'  },
+    fire:  { x:WIDTH-165, y:HEIGHT-85, w:135, h:65, label:"TIRER", active:false, code:'Space' }
+};
+const suiteBtnRect = { x:WIDTH/2-100, y:HEIGHT-70, w:200, h:50 };
+let keys = {};
+
+function initTargets() {
+    targets = [];
+    for (let i = 0; i < NUM_TARGETS; i++) {
+        let tx = 250 + Math.random() * (WIDTH - 300);
+        targets.push({ x:tx, y:0, width:30, height:30, alive:true });
+    }
+}
+
+function resetGame() {
+    terrain = [];
+    for (let i = 0; i < WIDTH; i++) terrain[i] = 450 + Math.sin(i*0.01)*80 + Math.sin(i*0.03)*40;
+    player = { x:100, width:30, height:20, angle:-Math.PI/4, power:0, isCharging:false, alive:true, winStats:null };
+    projectiles = []; explosions = []; particles = [];
+    currentFuel = MAX_FUEL; shotsFired = 0; scoreSavedOrIgnored = false;
+    liveScore = 10000; lastAddedScoreId = null;
+    projectileInFlight = false;
+    lastFiredPower = 0; showLastPower = false;
+    document.getElementById('save-score-container').style.display = 'none';
+    initTargets();
+    gameState  = 'PLAYING';
+    startTime  = Date.now();
+    totalPausedTime = 0;
+}
+
+function checkOrientation() {
+    const overlay = document.getElementById('orientation-overlay');
+    if (window.innerHeight > window.innerWidth) {
+        overlay.style.display = 'flex';
+        if (gameState === 'PLAYING') { gameState = 'PAUSED'; pauseStartTime = Date.now(); }
+    } else {
+        overlay.style.display = 'none';
+    }
+}
+
+function startExitTimer() {
+    if (gameState === 'MENU') return;
+    buttons.exit.exitTimeLeft = 3;
+    buttons.exit.label = `EXIT (${buttons.exit.exitTimeLeft})`;
+    buttons.exit.timer = setInterval(() => {
+        buttons.exit.exitTimeLeft--;
+        if (buttons.exit.exitTimeLeft > 0) {
+            buttons.exit.label = `EXIT (${buttons.exit.exitTimeLeft})`;
+        } else {
+            stopExitTimer();
+            document.getElementById('save-score-container').style.display = 'none';
+            gameState = 'MENU';
+        }
+    }, 1000);
+}
+function stopExitTimer() {
+    if (buttons.exit.timer) { clearInterval(buttons.exit.timer); buttons.exit.timer = null; }
+    buttons.exit.label  = "EXIT";
+    buttons.exit.active = false;
+}
+
+window.addEventListener('keydown', e => {
+    if (gameState !== 'PLAYING') return;
+    keys[e.code] = true;
+    if (e.code === 'Space' && !player.isCharging && !projectileInFlight) {
+        player.isCharging = true;
+        showLastPower = false;
+    }
+});
+window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+    if (e.code === 'Space' && player.isCharging && gameState === 'PLAYING') {
+        fireProjectile();
+        player.isCharging = false;
+        player.power = 0;
+    }
+});
+
+function getCanvasCoordinates(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (clientX - rect.left) * (LWIDTH  / rect.width),
+        y: (clientY - rect.top)  * (LHEIGHT / rect.height)
+    };
+}
+
+function processTouchInputs(e) {
+    if (window.innerHeight > window.innerWidth) return;
+    ['left','right','up','down','fire'].forEach(bKey => {
+        buttons[bKey].active    = false;
+        keys[buttons[bKey].code] = false;
+    });
+    let points = [];
+    if (e.touches) {
+        for (let i = 0; i < e.touches.length; i++)
+            points.push(getCanvasCoordinates(e.touches[i].clientX, e.touches[i].clientY));
+    } else if (e.type === 'mousedown' || e.type === 'mousemove') {
+        if (e.type === 'mousemove' && e.buttons !== 1) return;
+        points.push(getCanvasCoordinates(e.clientX, e.clientY));
+    }
+    points.forEach(pt => {
+        if (gameState === 'WIN' && !scoreSavedOrIgnored) {
+            if (pt.x >= suiteBtnRect.x && pt.x <= suiteBtnRect.x + suiteBtnRect.w &&
+                pt.y >= suiteBtnRect.y && pt.y <= suiteBtnRect.y + suiteBtnRect.h) {
+                document.getElementById('save-score-container').style.display = 'block';
+                document.getElementById('player-name').value = '';
+                document.getElementById('player-name').focus();
+            }
+            return;
+        }
+        for (let bKey in buttons) {
+            let b = buttons[bKey];
+            if (pt.x >= b.x && pt.x <= b.x + b.w && pt.y >= b.y && pt.y <= b.y + b.h) {
+                if (bKey === 'start' && (e.type === 'touchstart' || e.type === 'mousedown')) {
+                    if (gameState !== 'PLAYING' && gameState !== 'PAUSED') resetGame();
+                } else if (bKey === 'pause' && (e.type === 'touchstart' || e.type === 'mousedown')) {
+                    if      (gameState === 'PLAYING') { gameState = 'PAUSED'; pauseStartTime = Date.now(); }
+                    else if (gameState === 'PAUSED')  { gameState = 'PLAYING'; totalPausedTime += Date.now() - pauseStartTime; }
+                } else if (bKey === 'exit' && (e.type === 'touchstart' || e.type === 'mousedown')) {
+                    b.active = true; startExitTimer();
+                } else if (gameState === 'PLAYING' && b.code) {
+                    b.active = true;
+                    keys[b.code] = true;
+                    if (bKey === 'fire' && !player.isCharging && !projectileInFlight) {
+                        player.isCharging = true;
+                        showLastPower = false;
+                    }
+                }
+            }
+        }
+    });
+    if ((e.type === 'touchend' || e.type === 'mouseup' || e.type === 'touchcancel') && gameState === 'PLAYING') {
+        if (player.isCharging && !keys['Space']) {
+            fireProjectile();
+            player.isCharging = false;
+            player.power = 0;
+        }
+    }
+}
+function handleReleaseOrLeave(e) {
+    if (buttons.exit.active) stopExitTimer();
+    processTouchInputs(e);
+}
+canvas.addEventListener('touchstart',  processTouchInputs,   { passive:false });
+canvas.addEventListener('touchmove',   processTouchInputs,   { passive:false });
+canvas.addEventListener('touchend',    handleReleaseOrLeave, { passive:false });
+canvas.addEventListener('touchcancel', handleReleaseOrLeave, { passive:false });
+canvas.addEventListener('mousedown',  processTouchInputs);
+canvas.addEventListener('mousemove',  processTouchInputs);
+canvas.addEventListener('mouseup',    handleReleaseOrLeave);
+canvas.addEventListener('mouseleave', handleReleaseOrLeave);
+
+document.getElementById('btn-save-score').addEventListener('click', () => {
+    let name = document.getElementById('player-name').value.trim().toUpperCase();
+    if (!name) name = "ANONYME";
+    lastAddedScoreId = Date.now() + "_" + Math.random();
+    let scores = JSON.parse(localStorage.getItem('tank_scores')) || [];
+    scores.push({ id:lastAddedScoreId, name, finalScore:player.winStats.finalScore, warCost:player.winStats.warCost });
+    scores.sort((a,b) => b.finalScore - a.finalScore);
+    scores = scores.slice(0,10);
+    localStorage.setItem('tank_scores', JSON.stringify(scores));
+    scoreSavedOrIgnored = true;
+    document.getElementById('save-score-container').style.display = 'none';
+});
+document.getElementById('btn-ignore-score').addEventListener('click', () => {
+    lastAddedScoreId = null;
+    scoreSavedOrIgnored = true;
+    document.getElementById('save-score-container').style.display = 'none';
+});
+
+function fireProjectile() {
+    if (projectileInFlight) return;
+    let ty = terrain[Math.floor(player.x)];
+    let cannonBaseY = ty - 14;
+    lastFiredPower = player.power;
+    showLastPower  = true;
+    shotsFired++;
+    projectileInFlight = true;
+    projectiles.push({
+        x: player.x + Math.cos(player.angle) * 22,
+        y: cannonBaseY + Math.sin(player.angle) * 22,
+        vx: Math.cos(player.angle) * (player.power * 0.5),
+        vy: Math.sin(player.angle) * (player.power * 0.5),
+        radius:3, craterRadius:35, color:"#333",
+        startX:player.x, startY:cannonBaseY
+    });
+}
+
+function createCrater(impactX, impactY, explosionRadius, projectileSourceX) {
+    let ix = Math.floor(impactX);
+    for (let x = ix - explosionRadius; x <= ix + explosionRadius; x++) {
+        if (x >= 0 && x < WIDTH) {
+            let d = Math.abs(x - ix);
+            terrain[x] += Math.sqrt(explosionRadius*explosionRadius - d*d);
+        }
+    }
+    if (player.alive) {
+        let playerY = terrain[Math.floor(player.x)] - (player.height / 2);
+        let distPlayer = Math.hypot(player.x - impactX, playerY - impactY);
+        if (distPlayer <= explosionRadius && Math.abs(impactX - projectileSourceX) > 45) {
+            player.alive = false; gameState = 'GAMEOVER';
+        }
+    }
+    targets.forEach(t => {
+        if (t.alive) {
+            let nx = Math.max(t.x - t.width/2,  Math.min(impactX, t.x + t.width/2));
+            let ny = Math.max(t.y,               Math.min(impactY, t.y + t.height));
+            if (Math.hypot(nx - impactX, ny - impactY) <= explosionRadius) t.alive = false;
+        }
+    });
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    if (keys['ArrowLeft']  && currentFuel > 0) { let ox=player.x; player.x=Math.max(15,      player.x-1); if(player.x!==ox) currentFuel-=0.15; }
+    if (keys['ArrowRight'] && currentFuel > 0) { let ox=player.x; player.x=Math.min(WIDTH-15, player.x+1); if(player.x!==ox) currentFuel-=0.15; }
+    currentFuel = Math.max(0, currentFuel);
+    if (keys['ArrowUp'])   player.angle -= 0.05;
+    if (keys['ArrowDown']) player.angle += 0.05;
+    if (player.isCharging) player.power = Math.min(MAX_POWER, player.power + 0.5);
+
+    if (terrain[Math.floor(player.x)] >= HEIGHT) { player.alive=false; gameState='GAMEOVER'; }
+
+    let aliveCount = 0;
+    targets.forEach(t => {
+        if (t.alive) {
+            let tx = Math.floor(t.x);
+            t.y = terrain[tx] - t.height;
+            if (terrain[tx] >= HEIGHT) t.alive = false;
+            if (t.alive) aliveCount++;
+        }
+    });
+
+    let elapsedTime = Math.floor((Date.now() - startTime - totalPausedTime) / 1000);
+    let baseScore   = Math.max(0, 10000 - elapsedTime * 50);
+    let fuelUsed    = Math.ceil(MAX_FUEL - currentFuel);
+    let fuelCost    = fuelUsed * 50;
+    let ammoCost    = shotsFired * 300;
+    let warCost     = fuelCost + ammoCost;
+    liveScore = baseScore - warCost;
+
+    if (aliveCount === 0 && player.alive) {
+        gameState = 'WIN'; finalTime = elapsedTime;
+        player.winStats = { baseScore, fuelUsed, fuelCost, ammoCost, warCost, finalScore:liveScore };
+    }
+
+    for (let i=explosions.length-1; i>=0; i--) {
+        let e=explosions[i]; e.currentRadius+=e.maxRadius/10; e.alpha-=0.1;
+        if (e.alpha<=0) explosions.splice(i,1);
+    }
+    for (let i=particles.length-1; i>=0; i--) {
+        let p=particles[i]; p.vy+=p.gravity; p.x+=p.vx; p.y+=p.vy;
+        p.alpha-=p.decay; p.radius*=0.97;
+        if (p.alpha<=0||p.radius<0.4) particles.splice(i,1);
+    }
+    for (let i=projectiles.length-1; i>=0; i--) {
+        let p=projectiles[i]; p.vy+=GRAVITY; p.x+=p.vx; p.y+=p.vy;
+        if (p.x<0||p.x>WIDTH||p.y>HEIGHT) { projectiles.splice(i,1); projectileInFlight=false; continue; }
+        let px=Math.floor(p.x);
+        if (px>=0&&px<WIDTH&&p.y>=terrain[px]) {
+            let impactY=terrain[px];
+            createCrater(p.x, impactY, p.craterRadius, p.startX);
+            explosions.push({ x:p.x, y:impactY, currentRadius:0, maxRadius:p.craterRadius, alpha:1 });
+            const count=Math.floor(20+p.craterRadius*0.6);
+            const colors=['#FF4500','#FF8C00','#FFD700','#FF6347','#FFA500','#FFFACD'];
+            for (let j=0; j<count; j++) {
+                let speed=1+Math.random()*(p.craterRadius*0.15);
+                let angle=Math.random()*Math.PI*2;
+                particles.push({ x:p.x, y:impactY, vx:Math.cos(angle)*speed, vy:Math.sin(angle)*speed-2-Math.random()*3,
+                    radius:1.5+Math.random()*3, color:colors[Math.floor(Math.random()*colors.length)],
+                    alpha:1, decay:0.025+Math.random()*0.03, gravity:0.12 });
+            }
+            projectiles.splice(i,1); projectileInFlight=false;
+        }
+    }
+}
+
+// ── Jauge de puissance (arc circulaire) ──────────────────────────
+function drawPowerGauge(ratio, isCharging) {
+    const cx = WIDTH - 97;
+    const cy = HEIGHT - 165;
+    const r  = 44;
+    ctx.save();
+    // Fond
+    ctx.beginPath(); ctx.arc(cx, cy, r+6, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
+    // Arc de fond
+    ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI*0.75, Math.PI*0.75);
+    ctx.strokeStyle='rgba(80,80,80,0.7)'; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
+    // Couleur dynamique
+    let gaugeColor = ratio < 0.4 ? '#00ff44' : ratio < 0.75 ? '#ffaa00' : '#ff2200';
+    let visible = !(ratio >= 1.0 && Math.floor(Date.now()/150)%2===0);
+    if (ratio > 0 && visible) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, -Math.PI*0.75, -Math.PI*0.75 + ratio*Math.PI*1.5);
+        ctx.strokeStyle=gaugeColor; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
+    }
+    // Icône ⚡
+    ctx.fillStyle = isCharging ? gaugeColor : 'rgba(200,200,200,0.5)';
+    ctx.font='bold 28px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('⚡', cx, cy);
+    // Pourcentage
+    let pct = Math.round(ratio*100);
+    ctx.fillStyle = isCharging ? '#000' : 'rgba(80,80,80,0.7)';
+    ctx.font='bold 13px monospace';
+    ctx.fillText(pct+'%', cx, cy+22);
+    // Label PWR
+    ctx.fillStyle = isCharging ? 'rgba(0,0,0,0.8)' : 'rgba(100,100,100,0.5)';
+    ctx.font='bold 11px monospace';
+    ctx.fillText('PWR', cx, cy-r-12);
+    ctx.restore();
+}
+
+// ── Jauge d'essence ───────────────────────────────────────────────
+function drawFuelGauge(x, y, width, height) {
+    ctx.save();
+    let iconX=x-22, iconY=y+2;
+    ctx.fillStyle='rgba(0,0,0,0.5)';
+    ctx.fillRect(iconX,iconY,12,15); ctx.fillRect(iconX+12,iconY+4,2,9);
+    ctx.fillStyle='#ff0'; ctx.fillRect(iconX+2,iconY+3,7,4);
+    ctx.lineWidth=2; ctx.strokeStyle='rgba(0,0,0,0.5)'; ctx.strokeRect(x,y,width,height);
+    ctx.fillStyle='rgba(220,220,220,0.6)'; ctx.fillRect(x,y,width,height);
+    let fuelRatio=currentFuel/MAX_FUEL;
+    let gaugeColor='rgba(0,180,0,0.8)';
+    if      (fuelRatio<0.20) gaugeColor=(Math.floor(Date.now()/250)%2===0)?'rgba(255,0,0,0.9)':'rgba(100,0,0,0.4)';
+    else if (fuelRatio<0.50) gaugeColor='rgba(200,100,0,0.85)';
+    let fillWidth=(width-4)*fuelRatio;
+    if (fillWidth>0) { ctx.fillStyle=gaugeColor; ctx.fillRect(x+2,y+2,fillWidth,height-4); }
+    ctx.fillStyle='#000'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
+    ctx.fillText('E',x+8,y+height-5);
+    ctx.fillText('½',x+(width/2),y+height-5);
+    ctx.fillText('F',x+width-8,y+height-5);
+    ctx.restore();
+}
+
+// ── Icônes HUD ────────────────────────────────────────────────────
+function drawBulletIcon(x, y, size) {
+    ctx.save();
+    ctx.fillStyle='#111';
+    ctx.beginPath(); ctx.arc(x, y, size*0.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.3)';
+    ctx.beginPath(); ctx.ellipse(x-size*0.15, y-size*0.15, size*0.18, size*0.11, -0.5, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+function drawTargetIcon(x, y, size) {
+    ctx.save();
+    const r=size*0.5;
+    ctx.strokeStyle='#cc0000'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x,y,r*0.4,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x-r*1.0,y); ctx.lineTo(x-r*0.5,y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+r*0.5,y); ctx.lineTo(x+r*1.0,y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,y-r*1.0); ctx.lineTo(x,y-r*0.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,y+r*0.5); ctx.lineTo(x,y+r*1.0); ctx.stroke();
+    ctx.fillStyle='#cc0000';
+    ctx.beginPath(); ctx.arc(x,y,r*0.12,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+function drawClockIcon(x, y, size) {
+    ctx.save();
+    const r=size*0.5;
+    ctx.strokeStyle='#111'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+r*0.35,y-r*0.35); ctx.stroke();
+    let elapsed=(gameState==='PLAYING')?Math.floor((Date.now()-startTime-totalPausedTime)/1000):finalTime;
+    let secAngle=(elapsed%60)/60*Math.PI*2-Math.PI/2;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.cos(secAngle)*r*0.55,y+Math.sin(secAngle)*r*0.55); ctx.stroke();
+    ctx.fillStyle='#111';
+    ctx.beginPath(); ctx.arc(x,y,r*0.12,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+}
+
+// ── Boutons virtuels ─────────────────────────────────────────────
+function drawVirtualButton(btn, isSystem=false) {
+    ctx.save();
+    let alphaFill=btn.active?0.75:0.18;
+    if (btn.active) {
+        ctx.fillStyle  =isSystem?`rgba(255,255,255,${alphaFill})`:`rgba(0,255,0,${alphaFill})`;
+        ctx.strokeStyle=isSystem?'rgba(255,255,255,0.9)':'rgba(0,255,0,0.9)';
+    } else {
+        ctx.fillStyle  =`rgba(0,0,0,${alphaFill})`;
+        ctx.strokeStyle=isSystem?'rgba(200,200,200,0.35)':'rgba(0,255,0,0.35)';
+    }
+    ctx.lineWidth=2;
+    ctx.beginPath(); ctx.roundRect(btn.x,btn.y,btn.w,btn.h,6); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=btn.active?'#111':(isSystem?'rgba(255,255,255,0.55)':'rgba(0,255,0,0.55)');
+    ctx.font=isSystem?'bold 13px monospace':'bold 20px monospace';
+    if (btn===buttons.fire) ctx.font='bold 22px monospace';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(btn.label, btn.x+btn.w/2, btn.y+btn.h/2);
+    ctx.restore();
+}
+
+// ── Boucle de rendu ───────────────────────────────────────────────
+function draw() {
+    ctx.clearRect(0,0,WIDTH,HEIGHT);
+
+    // ── MENU ──
+    if (gameState==='MENU') {
+        ctx.fillStyle='#111'; ctx.fillRect(0,0,WIDTH,HEIGHT);
+        ctx.fillStyle='#0f0'; ctx.font='50px monospace'; ctx.textAlign='center';
+        ctx.fillText("TANK ARTILLERIE",WIDTH/2,HEIGHT/2-40);
+        ctx.font='24px monospace'; ctx.fillStyle='#fff';
+        ctx.fillText("Cliquez sur le bouton virtuel START en haut",WIDTH/2,HEIGHT/2+20);
+        ctx.fillText("pour engager le combat !",WIDTH/2,HEIGHT/2+55);
+        drawVirtualButton(buttons.start,true);
+        requestAnimationFrame(()=>{ update(); draw(); });
+        return;
+    }
+
+    // ── Ciel ──
+    ctx.fillStyle='#87CEEB'; ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+    // ── Terrain ──
+    ctx.fillStyle='#4CAF50';
+    ctx.beginPath(); ctx.moveTo(0,HEIGHT);
+    for (let x=0;x<WIDTH;x++) ctx.lineTo(x,terrain[x]);
+    ctx.lineTo(WIDTH,HEIGHT); ctx.fill();
+
+    // ── Cibles ──
+    let aliveCount=0;
+    targets.forEach(t=>{
+        if (t.alive) {
+            aliveCount++;
+            let ty=t.y+t.height, tx=t.x;
+            ctx.fillStyle='#111'; ctx.fillRect(tx-15,ty-6,30,6);
+            ctx.fillStyle='#444';
+            for(let w=-10;w<=10;w+=10){ctx.beginPath();ctx.arc(tx+w,ty-3,2,0,Math.PI*2);ctx.fill();}
+            ctx.fillStyle='#B25A20'; ctx.fillRect(tx-12,ty-14,24,8);
+            ctx.fillStyle='#8B4513'; ctx.fillRect(tx-8,ty-12,16,4);
+            ctx.fillStyle='#A0522D'; ctx.beginPath(); ctx.arc(tx,ty-14,6,Math.PI,0); ctx.fill();
+            ctx.strokeStyle='#333'; ctx.lineWidth=3; ctx.lineCap='round';
+            ctx.beginPath(); ctx.moveTo(tx,ty-16); ctx.lineTo(tx-18,ty-18); ctx.stroke();
+        }
+    });
+
+    // ── Joueur ──
+    if (player.alive) {
+        let ty=terrain[Math.floor(player.x)], cx=player.x, cby=ty-14;
+        ctx.fillStyle='#222'; ctx.fillRect(cx-15,ty-6,30,6);
+        ctx.fillStyle='#555';
+        for(let w=-10;w<=10;w+=10){ctx.beginPath();ctx.arc(cx+w,ty-3,2,0,Math.PI*2);ctx.fill();}
+        ctx.fillStyle='#3A5F7C'; ctx.fillRect(cx-13,ty-14,26,8);
+        ctx.fillStyle='#2A4B64'; ctx.fillRect(cx-8,ty-12,16,4);
+        ctx.fillStyle='#4A7295'; ctx.beginPath(); ctx.arc(cx,cby,7,Math.PI,0); ctx.fill();
+        ctx.strokeStyle='#777'; ctx.lineWidth=4; ctx.lineCap='round';
+        ctx.beginPath(); ctx.moveTo(cx,cby); ctx.lineTo(cx+Math.cos(player.angle)*22,cby+Math.sin(player.angle)*22); ctx.stroke();
+    }
+
+    // ── Effets ──
+    projectiles.forEach(p=>{ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.radius,0,Math.PI*2);ctx.fill();});
+    explosions.forEach(e=>{ctx.fillStyle=`rgba(255,140,0,${e.alpha})`;ctx.beginPath();ctx.arc(e.x,e.y,e.currentRadius,0,Math.PI*2);ctx.fill();});
+    particles.forEach(p=>{ctx.globalAlpha=Math.max(0,p.alpha);ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,p.radius,0,Math.PI*2);ctx.fill();});
+    ctx.globalAlpha=1;
+
+    // ── HUD ──
+    if (gameState==='PLAYING'||gameState==='PAUSED') {
+        let elapsedTime=Math.floor((Date.now()-startTime-totalPausedTime)/1000);
+
+        // Fond pastille score
+        ctx.fillStyle='rgba(255,255,255,0.75)';
+        ctx.beginPath(); ctx.roundRect(WIDTH-220,5,210,38,8); ctx.fill();
+        ctx.fillStyle='#000'; ctx.font='bold 22px monospace'; ctx.textAlign='right';
+        ctx.fillText(`SCORE: ${liveScore}`, WIDTH-14, 34);
+
+        // Fond pastille icônes
+        ctx.fillStyle='rgba(255,255,255,0.75)';
+        ctx.beginPath(); ctx.roundRect(WIDTH-340,48,330,30,8); ctx.fill();
+
+        const iconSize=18, iconY=63, spacing=100;
+        const baseX=WIDTH-20;
+
+        // Horloge
+        drawClockIcon(baseX-spacing*2-24, iconY, iconSize);
+        ctx.fillStyle='#000'; ctx.font='bold 14px monospace'; ctx.textAlign='left';
+        ctx.fillText(`${elapsedTime}s`, baseX-spacing*2-12, iconY+5);
+
+        // Réticule
+        drawTargetIcon(baseX-spacing-24, iconY, iconSize);
+        ctx.fillStyle='#000'; ctx.font='bold 14px monospace';
+        ctx.fillText(`${aliveCount}/${NUM_TARGETS}`, baseX-spacing-12, iconY+5);
+
+        // Boulet
+        drawBulletIcon(baseX-24, iconY, iconSize);
+        ctx.fillStyle='#000'; ctx.font='bold 14px monospace';
+        ctx.fillText(`${shotsFired}`, baseX-12, iconY+5);
+
+        drawFuelGauge(WIDTH-530,15,150,18);
+    }
+
+    // ── Boutons virtuels + jauge PWR ──
+    if (gameState==='PLAYING') {
+        drawVirtualButton(buttons.start,true);
+        drawVirtualButton(buttons.pause,true);
+        drawVirtualButton(buttons.exit,true);
+        drawVirtualButton(buttons.left);
+        drawVirtualButton(buttons.right);
+        drawVirtualButton(buttons.up);
+        drawVirtualButton(buttons.down);
+        drawVirtualButton(buttons.fire);
+        if      (player.isCharging)  drawPowerGauge(player.power/MAX_POWER, true);
+        else if (showLastPower)       drawPowerGauge(lastFiredPower/MAX_POWER, false);
+    }
+
+    // ── Overlays ──
+    if (gameState==='PAUSED') {
+        ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
+        ctx.fillStyle='#fff'; ctx.font='60px monospace'; ctx.textAlign='center';
+        ctx.fillText("PAUSE",WIDTH/2,HEIGHT/2);
+        drawVirtualButton(buttons.pause,true);
+    } else if (gameState==='GAMEOVER') {
+        ctx.fillStyle='rgba(0,0,0,0.8)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
+        ctx.fillStyle='#f00'; ctx.font='60px monospace'; ctx.textAlign='center';
+        ctx.fillText("GAME OVER",WIDTH/2,HEIGHT/2-20);
+        ctx.font='24px monospace'; ctx.fillStyle='#fff';
+        ctx.fillText("Votre tank a été détruit.",WIDTH/2,HEIGHT/2+30);
+        drawVirtualButton(buttons.start,true);
+    } else if (gameState==='WIN') {
+        ctx.fillStyle='rgba(0,0,0,0.95)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
+        ctx.fillStyle='#0f0'; ctx.font='bold 48px monospace'; ctx.textAlign='center';
+        ctx.fillText("VICTOIRE !",WIDTH/2,55);
+        ctx.font='bold 40px monospace'; ctx.fillStyle='#fff';
+        ctx.fillText(`SCORE DE BASE : ${player.winStats.baseScore}`,WIDTH/2,115);
+        ctx.fillStyle='#f55';
+        ctx.fillText(`BOULETS (${shotsFired}) : -${player.winStats.ammoCost}`,WIDTH/2,165);
+        ctx.fillText(`ESSENCE (${player.winStats.fuelUsed}L) : -${player.winStats.fuelCost}`,WIDTH/2,215);
+        ctx.fillStyle='#ff0'; ctx.font='bold 46px monospace';
+        ctx.fillText(`SCORE FINAL : ${player.winStats.finalScore}`,WIDTH/2,275);
+        if (scoreSavedOrIgnored) {
+            ctx.fillStyle='#0df'; ctx.font='22px monospace';
+            ctx.fillText("--- TOP 10 DES MEILLEURS SCORES ---",WIDTH/2,330);
+            let scores=JSON.parse(localStorage.getItem('tank_scores'))||[];
+            ctx.font='18px monospace';
+            if (scores.length===0) { ctx.fillStyle='#fff'; ctx.fillText("(Aucun score enregistré)",WIDTH/2,370); }
+            else {
+                scores.forEach((s,idx)=>{
+                    let scoreStr=`${idx+1}. ${s.name} : ${s.finalScore} (-${s.warCost})`;
+                    let rowY=idx<5?375+(idx*32):375+((idx-5)*32);
+                    ctx.fillStyle=(lastAddedScoreId&&s.id===lastAddedScoreId)?'#ff0':'#fff';
+                    ctx.textAlign='left';
+                    ctx.fillText(scoreStr,idx<5?WIDTH/2-380:WIDTH/2+40,rowY);
+                });
+            }
+            drawVirtualButton(buttons.start,true);
+        } else {
+            ctx.textAlign='center'; ctx.fillStyle='#ff0';
+            ctx.fillRect(suiteBtnRect.x,suiteBtnRect.y,suiteBtnRect.w,suiteBtnRect.h);
+            ctx.fillStyle='#111'; ctx.font='bold 22px monospace';
+            ctx.fillText("SUITE",WIDTH/2,HEIGHT-37);
+        }
+    }
+
+    requestAnimationFrame(()=>{ update(); draw(); });
+}
+draw();
+</script>
+</body>
+</html>
