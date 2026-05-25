@@ -87,6 +87,23 @@ const LHEIGHT = 600;
 canvas.width  = LWIDTH;
 canvas.height = LHEIGHT;
 
+// ── Système Audio ────────────────────────────────────────────────
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playTone(type, duration, freq, endFreq = 0, vol = 0.1) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, audioCtx.currentTime + duration);
+    gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+}
+
 function resizeCanvas() {
     const sw = window.innerWidth;
     const sh = window.innerHeight;
@@ -314,6 +331,7 @@ function fireProjectile() {
 
 function createCrater(impactX, impactY, explosionRadius, projectileSourceX) {
     let ix = Math.floor(impactX);
+    let tankHit = false;
     for (let x = ix - explosionRadius; x <= ix + explosionRadius; x++) {
         if (x >= 0 && x < WIDTH) {
             let d = Math.abs(x - ix);
@@ -331,20 +349,34 @@ function createCrater(impactX, impactY, explosionRadius, projectileSourceX) {
         if (t.alive) {
             let nx = Math.max(t.x - t.width/2,  Math.min(impactX, t.x + t.width/2));
             let ny = Math.max(t.y,               Math.min(impactY, t.y + t.height));
-            if (Math.hypot(nx - impactX, ny - impactY) <= explosionRadius) t.alive = false;
+            if (Math.hypot(nx - impactX, ny - impactY) <= explosionRadius) {
+                t.alive = false;
+                tankHit = true;
+            }
         }
     });
+    if (tankHit) playTone('sawtooth', 0.8, 200, 30, 0.5);
+    else playTone('square', 0.5, 100, 20, 0.3);
 }
 
 function update() {
     if (gameState !== 'PLAYING') return;
 
-    if (keys['ArrowLeft']  && currentFuel > 0) { let ox=player.x; player.x=Math.max(15,      player.x-1); if(player.x!==ox) currentFuel-=0.15; }
-    if (keys['ArrowRight'] && currentFuel > 0) { let ox=player.x; player.x=Math.min(WIDTH-15, player.x+1); if(player.x!==ox) currentFuel-=0.15; }
+    if (keys['ArrowLeft']  && currentFuel > 0) { 
+        let ox=player.x; player.x=Math.max(15, player.x-1); 
+        if(player.x!==ox) { currentFuel-=0.15; if(Math.random()<0.2) playTone('sawtooth', 0.1, 40 + Math.random()*20, 20, 0.05); }
+    }
+    if (keys['ArrowRight'] && currentFuel > 0) { 
+        let ox=player.x; player.x=Math.min(WIDTH-15, player.x+1); 
+        if(player.x!==ox) { currentFuel-=0.15; if(Math.random()<0.2) playTone('sawtooth', 0.1, 40 + Math.random()*20, 20, 0.05); }
+    }
     currentFuel = Math.max(0, currentFuel);
     if (keys['ArrowUp'])   player.angle -= 0.05;
     if (keys['ArrowDown']) player.angle += 0.05;
-    if (player.isCharging) player.power = Math.min(MAX_POWER, player.power + 0.5);
+    if (player.isCharging) {
+        player.power = Math.min(MAX_POWER, player.power + 0.5);
+        if(Math.random()<0.3) playTone('sine', 0.05, 200 + player.power*10, 0, 0.05);
+    }
 
     if (terrain[Math.floor(player.x)] >= HEIGHT) { player.alive=false; gameState='GAMEOVER'; }
 
@@ -382,6 +414,7 @@ function update() {
     }
     for (let i=projectiles.length-1; i>=0; i--) {
         let p=projectiles[i]; p.vy+=GRAVITY; p.x+=p.vx; p.y+=p.vy;
+        if (Math.random()<0.1) playTone('square', 0.1, 800 - p.y/2, 400, 0.02);
         if (p.x<0||p.x>WIDTH||p.y>HEIGHT) { projectiles.splice(i,1); projectileInFlight=false; continue; }
         let px=Math.floor(p.x);
         if (px>=0&&px<WIDTH&&p.y>=terrain[px]) {
@@ -402,89 +435,70 @@ function update() {
     }
 }
 
+// ── Reste des fonctions de rendu inchangées ──
 function drawPowerGauge(ratio, isCharging) {
-    const cx = WIDTH - 97;
-    const cy = HEIGHT - 165;
-    const r  = 44;
+    const cx = WIDTH - 97; const cy = HEIGHT - 165; const r  = 44;
     ctx.save();
-    ctx.beginPath(); ctx.arc(cx, cy, r+6, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, r+6, 0, Math.PI*2); ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
     ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI*0.75, Math.PI*0.75);
     ctx.strokeStyle='rgba(80,80,80,0.7)'; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
     let gaugeColor = ratio < 0.4 ? '#00ff44' : ratio < 0.75 ? '#ffaa00' : '#ff2200';
     let visible = !(ratio >= 1.0 && Math.floor(Date.now()/150)%2===0);
     if (ratio > 0 && visible) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, -Math.PI*0.75, -Math.PI*0.75 + ratio*Math.PI*1.5);
+        ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI*0.75, -Math.PI*0.75 + ratio*Math.PI*1.5);
         ctx.strokeStyle=gaugeColor; ctx.lineWidth=12; ctx.lineCap='round'; ctx.stroke();
     }
     ctx.fillStyle = isCharging ? gaugeColor : 'rgba(200,200,200,0.5)';
     ctx.font='bold 28px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
     ctx.fillText('⚡', cx, cy);
-    let pct = Math.round(ratio*100);
     ctx.fillStyle = isCharging ? '#000' : 'rgba(80,80,80,0.7)';
-    ctx.font='bold 13px monospace';
-    ctx.fillText(pct+'%', cx, cy+22);
-    ctx.fillStyle = isCharging ? 'rgba(0,0,0,0.8)' : 'rgba(100,100,100,0.5)';
-    ctx.font='bold 11px monospace';
-    ctx.fillText('PWR', cx, cy-r-12);
+    ctx.font='bold 13px monospace'; ctx.fillText(Math.round(ratio*100)+'%', cx, cy+22);
     ctx.restore();
 }
 
 function drawFuelGauge(x, y, width, height) {
     ctx.save();
-    let iconX=x-22, iconY=y+2;
-    ctx.fillStyle='rgba(0,0,0,0.5)';
-    ctx.fillRect(iconX,iconY,12,15); ctx.fillRect(iconX+12,iconY+4,2,9);
+    let iconX=x-22, iconY=y+2; ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(iconX,iconY,12,15); ctx.fillRect(iconX+12,iconY+4,2,9);
     ctx.fillStyle='#ff0'; ctx.fillRect(iconX+2,iconY+3,7,4);
     ctx.lineWidth=2; ctx.strokeStyle='rgba(0,0,0,0.5)'; ctx.strokeRect(x,y,width,height);
     ctx.fillStyle='rgba(220,220,220,0.6)'; ctx.fillRect(x,y,width,height);
     let fuelRatio=currentFuel/MAX_FUEL;
     let gaugeColor='rgba(0,180,0,0.8)';
-    if      (fuelRatio<0.20) gaugeColor=(Math.floor(Date.now()/250)%2===0)?'rgba(255,0,0,0.9)':'rgba(100,0,0,0.4)';
+    if (fuelRatio<0.20) gaugeColor=(Math.floor(Date.now()/250)%2===0)?'rgba(255,0,0,0.9)':'rgba(100,0,0,0.4)';
     else if (fuelRatio<0.50) gaugeColor='rgba(200,100,0,0.85)';
     let fillWidth=(width-4)*fuelRatio;
     if (fillWidth>0) { ctx.fillStyle=gaugeColor; ctx.fillRect(x+2,y+2,fillWidth,height-4); }
     ctx.fillStyle='#000'; ctx.font='bold 11px monospace'; ctx.textAlign='center';
-    ctx.fillText('E',x+8,y+height-5);
-    ctx.fillText('½',x+(width/2),y+height-5);
-    ctx.fillText('F',x+width-8,y+height-5);
+    ctx.fillText('E',x+8,y+height-5); ctx.fillText('½',x+(width/2),y+height-5); ctx.fillText('F',x+width-8,y+height-5);
     ctx.restore();
 }
 
 function drawBulletIcon(x, y, size) {
-    ctx.save();
-    ctx.fillStyle='#111';
-    ctx.beginPath(); ctx.arc(x, y, size*0.5, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle='rgba(255,255,255,0.3)';
-    ctx.beginPath(); ctx.ellipse(x-size*0.15, y-size*0.15, size*0.18, size*0.11, -0.5, 0, Math.PI*2); ctx.fill();
+    ctx.save(); ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x, y, size*0.5, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.ellipse(x-size*0.15, y-size*0.15, size*0.18, size*0.11, -0.5, 0, Math.PI*2); ctx.fill();
     ctx.restore();
 }
+
 function drawTargetIcon(x, y, size) {
-    ctx.save();
-    const r=size*0.5;
-    ctx.strokeStyle='#cc0000'; ctx.lineWidth=2;
+    ctx.save(); const r=size*0.5; ctx.strokeStyle='#cc0000'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke();
     ctx.beginPath(); ctx.arc(x,y,r*0.4,0,Math.PI*2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x-r*1.0,y); ctx.lineTo(x-r*0.5,y); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x+r*0.5,y); ctx.lineTo(x+r*1.0,y); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x,y-r*1.0); ctx.lineTo(x,y-r*0.5); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x,y+r*0.5); ctx.lineTo(x,y+r*1.0); ctx.stroke();
-    ctx.fillStyle='#cc0000';
-    ctx.beginPath(); ctx.arc(x,y,r*0.12,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#cc0000'; ctx.beginPath(); ctx.arc(x,y,r*0.12,0,Math.PI*2); ctx.fill();
     ctx.restore();
 }
+
 function drawClockIcon(x, y, size) {
-    ctx.save();
-    const r=size*0.5;
-    ctx.strokeStyle='#111'; ctx.lineWidth=2;
+    ctx.save(); const r=size*0.5; ctx.strokeStyle='#111'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+r*0.35,y-r*0.35); ctx.stroke();
     let elapsed=(gameState==='PLAYING')?Math.floor((Date.now()-startTime-totalPausedTime)/1000):finalTime;
     let secAngle=(elapsed%60)/60*Math.PI*2-Math.PI/2;
     ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+Math.cos(secAngle)*r*0.55,y+Math.sin(secAngle)*r*0.55); ctx.stroke();
-    ctx.fillStyle='#111';
-    ctx.beginPath(); ctx.arc(x,y,r*0.12,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(x,y,r*0.12,0,Math.PI*2); ctx.fill();
     ctx.restore();
 }
 
@@ -510,7 +524,6 @@ function drawVirtualButton(btn, isSystem=false) {
 
 function draw() {
     ctx.clearRect(0,0,WIDTH,HEIGHT);
-
     if (gameState==='MENU') {
         ctx.fillStyle='#111'; ctx.fillRect(0,0,WIDTH,HEIGHT);
         ctx.fillStyle='#0f0'; ctx.font='50px monospace'; ctx.textAlign='center';
@@ -522,7 +535,6 @@ function draw() {
         requestAnimationFrame(()=>{ update(); draw(); });
         return;
     }
-
     ctx.fillStyle='#87CEEB'; ctx.fillRect(0,0,WIDTH,HEIGHT);
     ctx.fillStyle='#4CAF50';
     ctx.beginPath(); ctx.moveTo(0,HEIGHT);
@@ -564,83 +576,50 @@ function draw() {
 
     if (gameState==='PLAYING'||gameState==='PAUSED') {
         let elapsedTime=Math.floor((Date.now()-startTime-totalPausedTime)/1000);
-        ctx.fillStyle='rgba(255,255,255,0.75)';
-        ctx.beginPath(); ctx.roundRect(WIDTH-220,5,210,38,8); ctx.fill();
-        ctx.fillStyle='#000'; ctx.font='bold 22px monospace'; ctx.textAlign='right';
-        ctx.fillText(`SCORE: ${liveScore}`, WIDTH-14, 34);
-        ctx.fillStyle='rgba(255,255,255,0.75)';
-        ctx.beginPath(); ctx.roundRect(WIDTH-340,48,330,30,8); ctx.fill();
-        const iconSize=18, iconY=63, spacing=100;
-        const baseX=WIDTH-20;
+        ctx.fillStyle='rgba(255,255,255,0.75)'; ctx.beginPath(); ctx.roundRect(WIDTH-220,5,210,38,8); ctx.fill();
+        ctx.fillStyle='#000'; ctx.font='bold 22px monospace'; ctx.textAlign='right'; ctx.fillText(`SCORE: ${liveScore}`, WIDTH-14, 34);
+        ctx.fillStyle='rgba(255,255,255,0.75)'; ctx.beginPath(); ctx.roundRect(WIDTH-340,48,330,30,8); ctx.fill();
+        const iconSize=18, iconY=63, spacing=100, baseX=WIDTH-20;
         drawClockIcon(baseX-spacing*2-24, iconY, iconSize);
-        ctx.fillStyle='#000'; ctx.font='bold 14px monospace'; ctx.textAlign='left';
-        ctx.fillText(`${elapsedTime}s`, baseX-spacing*2-12, iconY+5);
+        ctx.fillStyle='#000'; ctx.font='bold 14px monospace'; ctx.textAlign='left'; ctx.fillText(`${elapsedTime}s`, baseX-spacing*2-12, iconY+5);
         drawTargetIcon(baseX-spacing-24, iconY, iconSize);
-        ctx.fillStyle='#000'; ctx.font='bold 14px monospace';
         ctx.fillText(`${aliveCount}/${NUM_TARGETS}`, baseX-spacing-12, iconY+5);
         drawBulletIcon(baseX-24, iconY, iconSize);
-        ctx.fillStyle='#000'; ctx.font='bold 14px monospace';
         ctx.fillText(`${shotsFired}`, baseX-12, iconY+5);
         drawFuelGauge(WIDTH-530,15,150,18);
     }
-
     if (gameState==='PLAYING') {
-        drawVirtualButton(buttons.start,true);
-        drawVirtualButton(buttons.pause,true);
-        drawVirtualButton(buttons.exit,true);
-        drawVirtualButton(buttons.left);
-        drawVirtualButton(buttons.right);
-        drawVirtualButton(buttons.up);
-        drawVirtualButton(buttons.down);
-        drawVirtualButton(buttons.fire);
-        if      (player.isCharging)  drawPowerGauge(player.power/MAX_POWER, true);
-        else if (showLastPower)       drawPowerGauge(lastFiredPower/MAX_POWER, false);
+        drawVirtualButton(buttons.start,true); drawVirtualButton(buttons.pause,true); drawVirtualButton(buttons.exit,true);
+        drawVirtualButton(buttons.left); drawVirtualButton(buttons.right); drawVirtualButton(buttons.up); drawVirtualButton(buttons.down); drawVirtualButton(buttons.fire);
+        if (player.isCharging) drawPowerGauge(player.power/MAX_POWER, true);
+        else if (showLastPower) drawPowerGauge(lastFiredPower/MAX_POWER, false);
     }
-
     if (gameState==='PAUSED') {
         ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
-        ctx.fillStyle='#fff'; ctx.font='60px monospace'; ctx.textAlign='center';
-        ctx.fillText("PAUSE",WIDTH/2,HEIGHT/2);
+        ctx.fillStyle='#fff'; ctx.font='60px monospace'; ctx.textAlign='center'; ctx.fillText("PAUSE",WIDTH/2,HEIGHT/2);
         drawVirtualButton(buttons.pause,true);
     } else if (gameState==='GAMEOVER') {
         ctx.fillStyle='rgba(0,0,0,0.8)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
-        ctx.fillStyle='#f00'; ctx.font='60px monospace'; ctx.textAlign='center';
-        ctx.fillText("GAME OVER",WIDTH/2,HEIGHT/2-20);
-        ctx.font='24px monospace'; ctx.fillStyle='#fff';
-        ctx.fillText("Votre tank a été détruit.",WIDTH/2,HEIGHT/2+30);
+        ctx.fillStyle='#f00'; ctx.font='60px monospace'; ctx.textAlign='center'; ctx.fillText("GAME OVER",WIDTH/2,HEIGHT/2-20);
+        ctx.font='24px monospace'; ctx.fillStyle='#fff'; ctx.fillText("Votre tank a été détruit.",WIDTH/2,HEIGHT/2+30);
         drawVirtualButton(buttons.start,true);
     } else if (gameState==='WIN') {
         ctx.fillStyle='rgba(0,0,0,0.95)'; ctx.fillRect(0,0,WIDTH,HEIGHT);
-        ctx.fillStyle='#0f0'; ctx.font='bold 48px monospace'; ctx.textAlign='center';
-        ctx.fillText("VICTOIRE !",WIDTH/2,55);
-        ctx.font='bold 40px monospace'; ctx.fillStyle='#fff';
-        ctx.fillText(`SCORE DE BASE : ${player.winStats.baseScore}`,WIDTH/2,115);
-        ctx.fillStyle='#f55';
-        ctx.fillText(`BOULETS (${shotsFired}) : -${player.winStats.ammoCost}`,WIDTH/2,165);
+        ctx.fillStyle='#0f0'; ctx.font='bold 48px monospace'; ctx.textAlign='center'; ctx.fillText("VICTOIRE !",WIDTH/2,55);
+        ctx.font='bold 40px monospace'; ctx.fillStyle='#fff'; ctx.fillText(`SCORE DE BASE : ${player.winStats.baseScore}`,WIDTH/2,115);
+        ctx.fillStyle='#f55'; ctx.fillText(`BOULETS (${shotsFired}) : -${player.winStats.ammoCost}`,WIDTH/2,165);
         ctx.fillText(`ESSENCE (${player.winStats.fuelUsed}L) : -${player.winStats.fuelCost}`,WIDTH/2,215);
-        ctx.fillStyle='#ff0'; ctx.font='bold 46px monospace';
-        ctx.fillText(`SCORE FINAL : ${player.winStats.finalScore}`,WIDTH/2,275);
+        ctx.fillStyle='#ff0'; ctx.font='bold 46px monospace'; ctx.fillText(`SCORE FINAL : ${player.winStats.finalScore}`,WIDTH/2,275);
         if (scoreSavedOrIgnored) {
-            ctx.fillStyle='#0df'; ctx.font='22px monospace';
-            ctx.fillText("--- TOP 10 DES MEILLEURS SCORES ---",WIDTH/2,330);
+            ctx.fillStyle='#0df'; ctx.font='22px monospace'; ctx.fillText("--- TOP 10 DES MEILLEURS SCORES ---",WIDTH/2,330);
             let scores=JSON.parse(localStorage.getItem('tank_scores'))||[];
             ctx.font='18px monospace';
             if (scores.length===0) { ctx.fillStyle='#fff'; ctx.fillText("(Aucun score enregistré)",WIDTH/2,370); }
-            else {
-                scores.forEach((s,idx)=>{
-                    let scoreStr=`${idx+1}. ${s.name} : ${s.finalScore} (-${s.warCost})`;
-                    let rowY=idx<5?375+(idx*32):375+((idx-5)*32);
-                    ctx.fillStyle=(lastAddedScoreId&&s.id===lastAddedScoreId)?'#ff0':'#fff';
-                    ctx.textAlign='left';
-                    ctx.fillText(scoreStr,idx<5?WIDTH/2-380:WIDTH/2+40,rowY);
-                });
-            }
+            else { scores.forEach((s,idx)=>{ let scoreStr=`${idx+1}. ${s.name} : ${s.finalScore} (-${s.warCost})`; ctx.fillStyle=(lastAddedScoreId&&s.id===lastAddedScoreId)?'#ff0':'#fff'; ctx.textAlign='left'; ctx.fillText(scoreStr,idx<5?WIDTH/2-380:WIDTH/2+40,idx<5?375+(idx*32):375+((idx-5)*32)); }); }
             drawVirtualButton(buttons.start,true);
         } else {
-            ctx.textAlign='center'; ctx.fillStyle='#ff0';
-            ctx.fillRect(suiteBtnRect.x,suiteBtnRect.y,suiteBtnRect.w,suiteBtnRect.h);
-            ctx.fillStyle='#111'; ctx.font='bold 22px monospace';
-            ctx.fillText("SUITE",WIDTH/2,HEIGHT-37);
+            ctx.textAlign='center'; ctx.fillStyle='#ff0'; ctx.fillRect(suiteBtnRect.x,suiteBtnRect.y,suiteBtnRect.w,suiteBtnRect.h);
+            ctx.fillStyle='#111'; ctx.font='bold 22px monospace'; ctx.fillText("SUITE",WIDTH/2,HEIGHT-37);
         }
     }
     requestAnimationFrame(()=>{ update(); draw(); });
